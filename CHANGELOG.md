@@ -18,6 +18,7 @@
 - Discord: emit system events for reaction add/remove with per-guild reaction notifications (off|own|all|allowlist) (#140) — thanks @thewilloftheshadow.
 
 ### Fixes
+- Browser tools: tolerate trailing semicolons in evaluate expressions (#153) — thanks @azade-c.
 - Auto-reply: drop final payloads when block streaming to avoid duplicate Discord sends.
 - Bash tool: default auto-background delay to 10s.
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.

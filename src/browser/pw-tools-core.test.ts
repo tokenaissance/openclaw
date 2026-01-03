@@ -232,4 +232,41 @@ describe("pw-tools-core", () => {
     expect(dismiss).toHaveBeenCalled();
     expect(accept).not.toHaveBeenCalled();
   });
+
+  it("evaluates expressions with trailing semicolons", async () => {
+    const evaluate = vi.fn(
+      async (fn: (body: string) => unknown, body: string) => fn(body),
+    );
+    currentPage = { evaluate };
+
+    const mod = await importModule();
+    const result = await mod.evaluateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      fn: "() => 42;",
+    });
+
+    expect(result).toBe(42);
+    expect(evaluate).toHaveBeenCalled();
+  });
+
+  it("evaluates element expressions with trailing semicolons", async () => {
+    const evaluate = vi.fn(
+      async (
+        fn: (el: { tagName: string }, body: string) => unknown,
+        body: string,
+      ) => fn({ tagName: "DIV" }, body),
+    );
+    currentRefLocator = { evaluate };
+    currentPage = {};
+
+    const mod = await importModule();
+    const result = await mod.evaluateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      fn: "(el) => el.tagName;",
+      ref: "1",
+    });
+
+    expect(result).toBe("DIV");
+    expect(sessionMocks.refLocator).toHaveBeenCalledWith(currentPage, "1");
+  });
 });

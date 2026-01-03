@@ -207,6 +207,8 @@ export async function evaluateViaPlaywright(opts: {
 }): Promise<unknown> {
   const fnText = String(opts.fn ?? "").trim();
   if (!fnText) throw new Error("function is required");
+  const fnBody = fnText.replace(/[;\s]+$/g, "");
+  if (!fnBody) throw new Error("function is required");
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   if (opts.ref) {
@@ -226,7 +228,7 @@ export async function evaluateViaPlaywright(opts: {
       }
       `,
     ) as (el: Element, fnBody: string) => unknown;
-    return await locator.evaluate(elementEvaluator, fnText);
+    return await locator.evaluate(elementEvaluator, fnBody);
   }
   // Use Function constructor at runtime to avoid esbuild adding __name helper
   // which doesn't exist in the browser context
@@ -242,7 +244,7 @@ export async function evaluateViaPlaywright(opts: {
     }
     `,
   ) as (fnBody: string) => unknown;
-  return await page.evaluate(browserEvaluator, fnText);
+  return await page.evaluate(browserEvaluator, fnBody);
 }
 
 export async function armFileUploadViaPlaywright(opts: {
