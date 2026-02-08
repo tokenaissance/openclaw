@@ -11,12 +11,18 @@ struct RootCanvas: View {
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
     @AppStorage("onboarding.requestID") private var onboardingRequestID: Int = 0
+    @AppStorage("gateway.onboardingComplete") private var onboardingComplete: Bool = false
+    @AppStorage("gateway.hasConnectedOnce") private var hasConnectedOnce: Bool = false
+    @AppStorage("gateway.preferredStableID") private var preferredGatewayStableID: String = ""
+    @AppStorage("gateway.manual.enabled") private var manualGatewayEnabled: Bool = false
+    @AppStorage("gateway.manual.host") private var manualGatewayHost: String = ""
     @State private var presentedSheet: PresentedSheet?
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var showOnboarding: Bool = false
     @State private var onboardingAllowSkip: Bool = true
     @State private var didEvaluateOnboarding: Bool = false
+    @State private var didAutoOpenSettings: Bool = false
 
     private enum PresentedSheet: Identifiable {
         case settings
@@ -57,8 +63,9 @@ struct RootCanvas: View {
                 SettingsTab()
             case .chat:
                 ChatSheet(
-                    gateway: self.appModel.gatewaySession,
+                    gateway: self.appModel.operatorSession,
                     sessionKey: self.appModel.mainSessionKey,
+                    agentName: self.appModel.activeAgentName,
                     userAccent: self.appModel.seamColor)
             }
         }
@@ -73,6 +80,7 @@ struct RootCanvas: View {
                 .environment(self.gatewayController)
         }
         .onAppear { self.updateIdleTimer() }
+        .onAppear { self.maybeAutoOpenSettings() }
         .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
         .onChange(of: self.scenePhase) { _, _ in self.updateIdleTimer() }
         .onAppear { self.evaluateOnboardingPresentation(force: false) }
@@ -89,6 +97,13 @@ struct RootCanvas: View {
             self.evaluateOnboardingPresentation(force: true)
         }
         .onChange(of: self.appModel.gatewayRemoteAddress) { _, _ in self.updateCanvasDebugStatus() }
+        .onChange(of: self.appModel.gatewayServerName) { _, newValue in
+            if newValue != nil {
+                self.onboardingComplete = true
+                self.hasConnectedOnce = true
+            }
+            self.maybeAutoOpenSettings()
+        }
         .onChange(of: self.voiceWake.lastTriggeredCommand) { _, newValue in
             guard let newValue else { return }
             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -157,12 +172,33 @@ struct RootCanvas: View {
         self.onboardingAllowSkip = true
         self.showOnboarding = true
     }
+
+    private func shouldAutoOpenSettings() -> Bool {
+        if self.appModel.gatewayServerName != nil { return false }
+        if !self.hasConnectedOnce { return true }
+        if !self.onboardingComplete { return true }
+        return !self.hasExistingGatewayConfig()
+    }
+
+    private func hasExistingGatewayConfig() -> Bool {
+        if GatewaySettingsStore.loadLastGatewayConnection() != nil { return true }
+        let manualHost = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        return self.manualGatewayEnabled && !manualHost.isEmpty
+    }
+
+    private func maybeAutoOpenSettings() {
+        guard !self.didAutoOpenSettings else { return }
+        guard self.shouldAutoOpenSettings() else { return }
+        self.didAutoOpenSettings = true
+        self.presentedSheet = .settings
+    }
 }
 
 private struct CanvasContent: View {
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
+    @State private var showGatewayActions: Bool = false
     var systemColorScheme: ColorScheme
     var gatewayStatus: StatusPill.GatewayState
     var voiceWakeEnabled: Bool
@@ -220,7 +256,11 @@ private struct CanvasContent: View {
                 activity: self.statusActivity,
                 brighten: self.brightenButtons,
                 onTap: {
-                    self.openSettings()
+                    if self.gatewayStatus == .connected {
+                        self.showGatewayActions = true
+                    } else {
+                        self.openSettings()
+                    }
                 })
                 .padding(.leading, 10)
                 .safeAreaPadding(.top, 10)
@@ -234,6 +274,21 @@ private struct CanvasContent: View {
                     .safeAreaPadding(.top, 58)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
+        }
+        .confirmationDialog(
+            "Gateway",
+            isPresented: self.$showGatewayActions,
+            titleVisibility: .visible)
+        {
+            Button("Disconnect", role: .destructive) {
+                self.appModel.disconnectGateway()
+            }
+            Button("Open Settings") {
+                self.openSettings()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Disconnect from the gateway?")
         }
     }
 
@@ -286,6 +341,10 @@ private struct CanvasContent: View {
                 return StatusPill.Activity(title: "Mic permission", systemImage: "mic.slash", tint: .orange)
             }
             if voiceStatus == "Paused" {
+                // Talk mode intentionally pauses voice wake to release the mic. Don't spam the HUD for that case.
+                if self.appModel.talkMode.isEnabled {
+                    return nil
+                }
                 let suffix = self.appModel.isBackgrounded ? " (background)" : ""
                 return StatusPill.Activity(title: "Voice Wake paused\(suffix)", systemImage: "pause.circle.fill")
             }
