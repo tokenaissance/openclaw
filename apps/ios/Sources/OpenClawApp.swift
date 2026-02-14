@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct OpenClawApp: App {
+    @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
     @Environment(\.scenePhase) private var scenePhase

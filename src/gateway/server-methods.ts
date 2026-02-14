@@ -94,6 +94,7 @@ const WRITE_METHODS = new Set([
   "tts.setProvider",
   "voicewake.set",
   "node.invoke",
+  "node.push",
   "chat.send",
   "chat.abort",
   "browser.request",

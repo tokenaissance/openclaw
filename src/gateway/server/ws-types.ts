@@ -7,4 +7,6 @@ export type GatewayWsClient = {
   connId: string;
   presenceKey?: string;
   clientIp?: string;
+  // Updated on WebSocket-level "pong" responses. Used for liveness checks.
+  lastPongAtMs?: number;
 };

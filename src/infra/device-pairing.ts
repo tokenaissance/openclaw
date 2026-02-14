@@ -39,6 +39,28 @@ export type DeviceAuthTokenSummary = {
   lastUsedAtMs?: number;
 };
 
+export type DevicePushTokens = {
+  apns?: string;
+  updatedAtMs: number;
+};
+
+export type DeviceLastLocation = {
+  lat: number;
+  lon: number;
+  accuracyM?: number;
+  altitudeM?: number;
+  speedMps?: number;
+  courseDeg?: number;
+  tsMs: number;
+  source?: string;
+};
+
+export type DeviceLifecycleState = {
+  state: string;
+  updatedAtMs: number;
+  reason?: string;
+};
+
 export type PairedDevice = {
   deviceId: string;
   publicKey: string;
@@ -51,6 +73,9 @@ export type PairedDevice = {
   scopes?: string[];
   remoteIp?: string;
   tokens?: Record<string, DeviceAuthToken>;
+  push?: DevicePushTokens;
+  lastLocation?: DeviceLastLocation;
+  lifecycle?: DeviceLifecycleState;
   createdAtMs: number;
   approvedAtMs: number;
 };

@@ -25,6 +25,7 @@ import {
   validateNodePairVerifyParams,
   validateNodeRenameParams,
 } from "../protocol/index.js";
+import { loadApnsPrivateKeyPem, sendApnsPush } from "../push/apns.js";
 import {
   respondInvalidParams,
   respondUnavailableOnThrow,
@@ -255,6 +256,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
               caps: [],
               commands: [],
               permissions: undefined,
+              push: entry.push,
+              lastLocation: entry.lastLocation,
+              lifecycle: entry.lifecycle,
             },
           ]),
       );
@@ -284,6 +288,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
           pathEnv: live?.pathEnv,
           permissions: live?.permissions ?? paired?.permissions,
           connectedAtMs: live?.connectedAtMs,
+          lastPongAtMs: live?.client?.lastPongAtMs,
+          push: live?.push ?? paired?.push,
+          lastLocation: live?.lastLocation ?? paired?.lastLocation,
+          lifecycle: live?.lifecycle ?? paired?.lifecycle,
           paired: Boolean(paired),
           connected: Boolean(live),
         };
@@ -354,6 +362,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
           pathEnv: live?.pathEnv,
           permissions: live?.permissions,
           connectedAtMs: live?.connectedAtMs,
+          lastPongAtMs: live?.client?.lastPongAtMs,
+          push: live?.push ?? paired?.push,
+          lastLocation: live?.lastLocation ?? paired?.lastLocation,
+          lifecycle: live?.lifecycle ?? paired?.lifecycle,
           paired: Boolean(paired),
           connected: Boolean(live),
         },
@@ -509,6 +521,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
       const nodeContext = {
         deps: context.deps,
+        nodeRegistry: context.nodeRegistry,
         broadcast: context.broadcast,
         nodeSendToSession: context.nodeSendToSession,
         nodeSubscribe: context.nodeSubscribe,
@@ -533,5 +546,113 @@ export const nodeHandlers: GatewayRequestHandlers = {
       });
       respond(true, { ok: true }, undefined);
     });
+  },
+  "node.push": async ({ params, respond, context }) => {
+    // Intentionally hand-validated to avoid a bigger protocol schema update for now.
+    if (!params || typeof params !== "object") {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid params"));
+      return;
+    }
+    const p = params as Record<string, unknown>;
+    const nodeId = String(p.nodeId ?? "").trim();
+    if (!nodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    const title = typeof p.title === "string" ? p.title.trim() : "";
+    const body = typeof p.body === "string" ? p.body.trim() : "";
+    const data =
+      typeof p.data === "object" && p.data !== null ? (p.data as Record<string, unknown>) : {};
+
+    const envRaw = String(process.env.OPENCLAW_APNS_ENV ?? "sandbox")
+      .trim()
+      .toLowerCase();
+    const env = envRaw === "production" ? "production" : "sandbox";
+    const teamId = String(process.env.OPENCLAW_APNS_TEAM_ID ?? "").trim();
+    const keyId = String(process.env.OPENCLAW_APNS_KEY_ID ?? "").trim();
+    const topic = String(process.env.OPENCLAW_APNS_TOPIC ?? "").trim();
+    const keyPath = process.env.OPENCLAW_APNS_KEY_PATH ?? null;
+    const keyPem = process.env.OPENCLAW_APNS_KEY_P8 ?? null;
+
+    if (!teamId || !keyId || !topic) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "APNs not configured (set OPENCLAW_APNS_TEAM_ID, OPENCLAW_APNS_KEY_ID, OPENCLAW_APNS_TOPIC)",
+        ),
+      );
+      return;
+    }
+
+    const live = context.nodeRegistry.get(nodeId);
+    const list = await listDevicePairing();
+    const paired = list.paired.find((d) => d.deviceId === nodeId && isNodeEntry(d));
+    const deviceToken = (live?.push?.apns ?? paired?.push?.apns ?? "")
+      .trim()
+      .replaceAll(/\s+/g, "");
+    if (!deviceToken) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "no APNs token for node"));
+      return;
+    }
+
+    let privateKeyPem: string;
+    try {
+      privateKeyPem = await loadApnsPrivateKeyPem({ keyPath, keyPem });
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `APNs key load failed: ${String(err)}`),
+      );
+      return;
+    }
+
+    const aps: Record<string, unknown> = {};
+    if (title || body) {
+      aps.alert = { ...(title ? { title } : {}), ...(body ? { body } : {}) };
+    }
+    aps.sound = "default";
+
+    const payload: Record<string, unknown> = { aps };
+    // Custom data is kept top-level. Limit to openclaw_* keys to avoid accidental leakage.
+    for (const [k, v] of Object.entries(data)) {
+      if (!k.startsWith("openclaw_")) {
+        continue;
+      }
+      payload[k] = v;
+    }
+
+    const res = await sendApnsPush({
+      cfg: {
+        env,
+        teamId,
+        keyId,
+        topic,
+        privateKeyPem,
+      },
+      deviceToken,
+      payload,
+      pushType: "alert",
+      priority: 10,
+    });
+
+    if (!res.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `APNs push failed (status ${res.status})`, {
+          details: {
+            status: res.status,
+            apnsId: res.apnsId ?? null,
+            body: res.responseBody ?? null,
+          },
+        }),
+      );
+      return;
+    }
+
+    respond(true, { ok: true, status: res.status, apnsId: res.apnsId ?? null }, undefined);
   },
 };

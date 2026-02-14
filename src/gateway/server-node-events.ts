@@ -4,6 +4,7 @@ import { normalizeChannelId } from "../channels/plugins/index.js";
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
+import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
@@ -13,6 +14,92 @@ import { formatForLog } from "./ws-log.js";
 
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
+    case "node.lifecycle": {
+      if (!evt.payloadJSON) {
+        return;
+      }
+      let payload: unknown;
+      try {
+        payload = JSON.parse(evt.payloadJSON) as unknown;
+      } catch {
+        return;
+      }
+      const obj =
+        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+      const state = typeof obj.state === "string" ? obj.state.trim() : "";
+      if (!state) {
+        return;
+      }
+      const reason = typeof obj.reason === "string" ? obj.reason.trim() : undefined;
+      const now = Date.now();
+      const updatedAtMs =
+        typeof obj.tsMs === "number" && Number.isFinite(obj.tsMs) ? Math.floor(obj.tsMs) : now;
+      ctx.nodeRegistry.update(nodeId, {
+        lifecycle: { state, reason, updatedAtMs },
+      });
+      // Best-effort persistence for offline visibility in node.list.
+      void updatePairedDeviceMetadata(nodeId, {
+        lifecycle: { state, reason, updatedAtMs },
+      }).catch(() => {});
+      return;
+    }
+    case "node.location": {
+      if (!evt.payloadJSON) {
+        return;
+      }
+      let payload: unknown;
+      try {
+        payload = JSON.parse(evt.payloadJSON) as unknown;
+      } catch {
+        return;
+      }
+      const obj =
+        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+      const lat = typeof obj.lat === "number" ? obj.lat : NaN;
+      const lon = typeof obj.lon === "number" ? obj.lon : NaN;
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        return;
+      }
+      const accuracyM = typeof obj.accuracyM === "number" ? obj.accuracyM : undefined;
+      const altitudeM = typeof obj.altitudeM === "number" ? obj.altitudeM : undefined;
+      const speedMps = typeof obj.speedMps === "number" ? obj.speedMps : undefined;
+      const courseDeg = typeof obj.courseDeg === "number" ? obj.courseDeg : undefined;
+      const source = typeof obj.source === "string" ? obj.source.trim() : undefined;
+      const now = Date.now();
+      const tsMs =
+        typeof obj.tsMs === "number" && Number.isFinite(obj.tsMs) ? Math.floor(obj.tsMs) : now;
+
+      const loc = { lat, lon, accuracyM, altitudeM, speedMps, courseDeg, tsMs, source };
+      ctx.nodeRegistry.update(nodeId, { lastLocation: loc });
+      void updatePairedDeviceMetadata(nodeId, { lastLocation: loc }).catch(() => {});
+      return;
+    }
+    case "push.apnsToken": {
+      if (!evt.payloadJSON) {
+        return;
+      }
+      let payload: unknown;
+      try {
+        payload = JSON.parse(evt.payloadJSON) as unknown;
+      } catch {
+        return;
+      }
+      const obj =
+        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+      const token = typeof obj.token === "string" ? obj.token.trim() : "";
+      if (!token) {
+        return;
+      }
+      const now = Date.now();
+      const updatedAtMs =
+        typeof obj.updatedAtMs === "number" && Number.isFinite(obj.updatedAtMs)
+          ? Math.floor(obj.updatedAtMs)
+          : now;
+      const push = { apns: token, updatedAtMs };
+      ctx.nodeRegistry.update(nodeId, { push });
+      void updatePairedDeviceMetadata(nodeId, { push }).catch(() => {});
+      return;
+    }
     case "voice.transcript": {
       if (!evt.payloadJSON) {
         return;

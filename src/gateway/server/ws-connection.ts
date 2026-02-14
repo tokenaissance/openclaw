@@ -62,6 +62,8 @@ export function attachGatewayWsConnectionHandler(params: {
     let client: GatewayWsClient | null = null;
     let closed = false;
     const openedAt = Date.now();
+    // Track WebSocket-level liveness. We'll mirror this into GatewayWsClient after connect.
+    let lastPongAtMs = Date.now();
     const connId = randomUUID();
     const remoteAddr = (socket as WebSocket & { _socket?: { remoteAddress?: string } })._socket
       ?.remoteAddress;
@@ -143,6 +145,14 @@ export function attachGatewayWsConnectionHandler(params: {
     socket.once("error", (err) => {
       logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
       close();
+    });
+
+    // WebSocket protocol-level liveness: clients should automatically respond to ping frames with pong.
+    socket.on("pong", () => {
+      lastPongAtMs = Date.now();
+      if (client) {
+        client.lastPongAtMs = lastPongAtMs;
+      }
     });
 
     const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>
@@ -251,6 +261,8 @@ export function attachGatewayWsConnectionHandler(params: {
       getClient: () => client,
       setClient: (next) => {
         client = next;
+        // Seed last-pong from the socket's lifetime so the ping loop doesn't immediately disconnect new conns.
+        client.lastPongAtMs = lastPongAtMs;
         clients.add(next);
       },
       setHandshakeState: (next) => {

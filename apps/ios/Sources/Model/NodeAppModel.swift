@@ -97,7 +97,7 @@ final class NodeAppModel {
     private let notificationCenter: NotificationCentering
     let voiceWake = VoiceWakeManager()
     let talkMode: TalkModeManager
-    private let locationService: any LocationServicing
+    let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
     private let photosService: any PhotosServicing
     private let contactsService: any ContactsServicing
@@ -111,6 +111,8 @@ final class NodeAppModel {
     private var backgroundTalkSuspended = false
     private var backgroundedAt: Date?
     private var reconnectAfterBackgroundArmed = false
+    @ObservationIgnored var backgroundLocationTask: Task<Void, Never>?
+    var lastBackgroundLocationSentAtMs: Int = 0
 
     private var gatewayConnected = false
     private var operatorConnected = false
@@ -273,8 +275,43 @@ final class NodeAppModel {
             // Be conservative: release the mic when the app backgrounds.
             self.backgroundVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
             self.backgroundTalkSuspended = self.talkMode.suspendForBackground()
+
+            Task { [weak self] in
+                guard let self else { return }
+                await self.sendNodeLifecycleEvent(state: "backgrounding", reason: "scenePhase.background")
+            }
+
+            // Optional: keep the app alive via background location updates and report last-known
+            // location to the gateway. Requires Location Access = Always + UIBackgroundModes=location.
+            if self.shouldReportLocationInBackground() {
+                self.startBackgroundLocationReporting()
+            } else {
+                self.stopBackgroundLocationReporting()
+            }
+
+            // Default behavior: disconnect sockets so the gateway immediately sees the node as offline.
+            // If background location reporting is enabled, prefer keeping the sockets to stream updates.
+            let shouldDisconnect = self.shouldDisconnectOnBackground() && !self.shouldReportLocationInBackground()
+            if shouldDisconnect {
+                self.reconnectAfterBackgroundArmed = false
+                let taskId = UIApplication.shared.beginBackgroundTask(withName: "openclaw.disconnect-on-background")
+                Task { [weak self] in
+                    guard let self else { return }
+                    defer { UIApplication.shared.endBackgroundTask(taskId) }
+                    await self.operatorGateway.disconnect()
+                    await self.nodeGateway.disconnect()
+                    await MainActor.run {
+                        self.operatorConnected = false
+                        self.gatewayConnected = false
+                        self.talkMode.updateGatewayConnected(false)
+                    }
+                }
+            }
         case .active, .inactive:
             self.isBackgrounded = false
+            if phase == .active {
+                self.stopBackgroundLocationReporting()
+            }
             if self.operatorConnected {
                 self.startGatewayHealthMonitor()
             }
@@ -286,6 +323,12 @@ final class NodeAppModel {
                     let suspended = await MainActor.run { self.backgroundTalkSuspended }
                     await MainActor.run { self.backgroundTalkSuspended = false }
                     await self.talkMode.resumeAfterBackground(wasSuspended: suspended)
+                }
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.sendNodeLifecycleEvent(state: "foreground", reason: "scenePhase.active")
+                    await self.onAPNSTokenUpdated()
+                    await self.consumePendingExternalActions()
                 }
             }
             if phase == .active, self.reconnectAfterBackgroundArmed {
@@ -1675,6 +1718,7 @@ private extension NodeAppModel {
                                 await MainActor.run { self.gatewayRemoteAddress = addr }
                             }
                             await self.showA2UIOnConnectIfNeeded()
+                            await self.onNodeGatewayConnected()
                         },
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }

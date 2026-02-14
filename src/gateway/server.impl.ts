@@ -423,22 +423,25 @@ export async function startGatewayServer(
     }, skillsRefreshDelayMs);
   });
 
-  const { tickInterval, healthInterval, dedupeCleanup } = startGatewayMaintenanceTimers({
-    broadcast,
-    nodeSendToAllSubscribed,
-    getPresenceVersion,
-    getHealthVersion,
-    refreshGatewayHealthSnapshot,
-    logHealth,
-    dedupe,
-    chatAbortControllers,
-    chatRunState,
-    chatRunBuffers,
-    chatDeltaSentAt,
-    removeChatRun,
-    agentRunSeq,
-    nodeSendToSession,
-  });
+  const { tickInterval, wsPingInterval, healthInterval, dedupeCleanup } =
+    startGatewayMaintenanceTimers({
+      broadcast,
+      nodeSendToAllSubscribed,
+      getPresenceVersion,
+      getHealthVersion,
+      refreshGatewayHealthSnapshot,
+      logHealth,
+      logWsControl,
+      clients,
+      dedupe,
+      chatAbortControllers,
+      chatRunState,
+      chatRunBuffers,
+      chatDeltaSentAt,
+      removeChatRun,
+      agentRunSeq,
+      nodeSendToSession,
+    });
 
   const agentUnsub = onAgentEvent(
     createAgentEventHandler({
@@ -609,6 +612,7 @@ export async function startGatewayServer(
     nodePresenceTimers,
     broadcast,
     tickInterval,
+    wsPingInterval,
     healthInterval,
     dedupeCleanup,
     agentUnsub,

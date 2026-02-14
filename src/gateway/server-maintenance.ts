@@ -1,6 +1,7 @@
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import type { DedupeEntry } from "./server-shared.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   DEDUPE_MAX,
@@ -10,6 +11,9 @@ import {
 } from "./server-constants.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+
+const WS_PING_INTERVAL_MS = 20_000;
+const WS_PONG_STALE_MS = 65_000;
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -25,6 +29,8 @@ export function startGatewayMaintenanceTimers(params: {
   getHealthVersion: () => number;
   refreshGatewayHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   logHealth: { error: (msg: string) => void };
+  logWsControl: { warn: (msg: string) => void };
+  clients: Set<GatewayWsClient>;
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunState: { abortedRuns: Map<string, number> };
@@ -39,6 +45,7 @@ export function startGatewayMaintenanceTimers(params: {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
+  wsPingInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
 } {
@@ -58,6 +65,34 @@ export function startGatewayMaintenanceTimers(params: {
     params.broadcast("tick", payload, { dropIfSlow: true });
     params.nodeSendToAllSubscribed("tick", payload);
   }, TICK_INTERVAL_MS);
+
+  // WebSocket-level ping/pong liveness. This is a low-level "is the TCP/WebSocket path alive" check.
+  // It is not a guarantee that the app can execute node commands (e.g., iOS suspension).
+  const wsPingInterval = setInterval(() => {
+    const now = Date.now();
+    for (const c of params.clients) {
+      if (c.connect.role !== "node") {
+        continue;
+      }
+      const last = typeof c.lastPongAtMs === "number" ? c.lastPongAtMs : now;
+      if (now - last > WS_PONG_STALE_MS) {
+        params.logWsControl.warn(
+          `pong timeout conn=${c.connId} node=${c.connect.device?.id ?? c.connect.client.id}`,
+        );
+        try {
+          c.socket.close(4000, "pong timeout");
+        } catch {
+          /* ignore */
+        }
+        continue;
+      }
+      try {
+        c.socket.ping();
+      } catch {
+        /* ignore */
+      }
+    }
+  }, WS_PING_INTERVAL_MS);
 
   // periodic health refresh to keep cached snapshot warm
   const healthInterval = setInterval(() => {
@@ -116,5 +151,5 @@ export function startGatewayMaintenanceTimers(params: {
     }
   }, 60_000);
 
-  return { tickInterval, healthInterval, dedupeCleanup };
+  return { tickInterval, wsPingInterval, healthInterval, dedupeCleanup };
 }

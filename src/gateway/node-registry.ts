@@ -1,6 +1,28 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
+export type NodeSessionLocation = {
+  lat: number;
+  lon: number;
+  accuracyM?: number;
+  altitudeM?: number;
+  speedMps?: number;
+  courseDeg?: number;
+  tsMs: number;
+  source?: string;
+};
+
+export type NodeSessionLifecycle = {
+  state: string;
+  updatedAtMs: number;
+  reason?: string;
+};
+
+export type NodeSessionPushTokens = {
+  apns?: string;
+  updatedAtMs: number;
+};
+
 export type NodeSession = {
   nodeId: string;
   connId: string;
@@ -18,6 +40,9 @@ export type NodeSession = {
   permissions?: Record<string, boolean>;
   pathEnv?: string;
   connectedAtMs: number;
+  push?: NodeSessionPushTokens;
+  lastLocation?: NodeSessionLocation;
+  lifecycle?: NodeSessionLifecycle;
 };
 
 type PendingInvoke = {
@@ -102,6 +127,15 @@ export class NodeRegistry {
 
   get(nodeId: string): NodeSession | undefined {
     return this.nodesById.get(nodeId);
+  }
+
+  update(nodeId: string, patch: Partial<Omit<NodeSession, "nodeId" | "connId" | "client">>) {
+    const existing = this.nodesById.get(nodeId);
+    if (!existing) {
+      return false;
+    }
+    Object.assign(existing, patch);
+    return true;
   }
 
   async invoke(params: {

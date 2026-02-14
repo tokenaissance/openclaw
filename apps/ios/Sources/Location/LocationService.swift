@@ -12,6 +12,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
     private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
+    private var updatesContinuation: AsyncStream<CLLocation>.Continuation?
+    private var isStreaming = false
 
     override init() {
         super.init()
@@ -104,6 +106,42 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    func startLocationUpdates(
+        desiredAccuracy: OpenClawLocationAccuracy,
+        significantChangesOnly: Bool) -> AsyncStream<CLLocation>
+    {
+        self.stopLocationUpdates()
+
+        self.manager.desiredAccuracy = Self.accuracyValue(desiredAccuracy)
+        self.manager.pausesLocationUpdatesAutomatically = true
+        self.manager.allowsBackgroundLocationUpdates = true
+
+        self.isStreaming = true
+        if significantChangesOnly {
+            self.manager.startMonitoringSignificantLocationChanges()
+        } else {
+            self.manager.startUpdatingLocation()
+        }
+
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            self.updatesContinuation = continuation
+            continuation.onTermination = { @Sendable _ in
+                Task { @MainActor in
+                    self.stopLocationUpdates()
+                }
+            }
+        }
+    }
+
+    func stopLocationUpdates() {
+        guard self.isStreaming else { return }
+        self.isStreaming = false
+        self.manager.stopUpdatingLocation()
+        self.manager.stopMonitoringSignificantLocationChanges()
+        self.updatesContinuation?.finish()
+        self.updatesContinuation = nil
+    }
+
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         Task { @MainActor in
@@ -123,6 +161,13 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
                 cont.resume(returning: latest)
             } else {
                 cont.resume(throwing: Error.unavailable)
+            }
+        }
+
+        let latest = locations.last
+        Task { @MainActor in
+            if let latest, let updates = self.updatesContinuation {
+                updates.yield(latest)
             }
         }
     }

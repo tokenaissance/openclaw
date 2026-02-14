@@ -18,7 +18,10 @@ struct SettingsTab: View {
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = OpenClawLocationMode.off.rawValue
     @AppStorage("location.preciseEnabled") private var locationPreciseEnabled: Bool = true
+    @AppStorage("location.backgroundReporting.enabled") private var locationBackgroundReportingEnabled: Bool = false
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
+    @AppStorage("push.enabled") private var pushEnabled: Bool = false
+    @AppStorage("gateway.disconnectOnBackground") private var disconnectOnBackground: Bool = true
     @AppStorage("gateway.preferredStableID") private var preferredGatewayStableID: String = ""
     @AppStorage("gateway.lastDiscoveredStableID") private var lastDiscoveredGatewayStableID: String = ""
     @AppStorage("gateway.autoconnect") private var gatewayAutoConnect: Bool = false
@@ -288,6 +291,25 @@ struct SettingsTab: View {
                             .disabled(self.locationMode == .off)
 
                         Text("Always requires system permission and may prompt to open Settings.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("Background Location Reporting", isOn: self.$locationBackgroundReportingEnabled)
+                            .disabled(self.locationMode != .always)
+                        Text("When enabled with Always, OpenClaw can stream last-known location to the gateway while in the background.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("Disconnect On Background", isOn: self.$disconnectOnBackground)
+                        Text("If enabled, OpenClaw closes gateway sockets when it backgrounds so the gateway sees the node go offline immediately.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("Push Notifications", isOn: self.$pushEnabled)
+                            .onChange(of: self.pushEnabled) { _, newValue in
+                                Task { await self.appModel.setPushEnabled(newValue) }
+                            }
+                        Text("Requires Xcode Push Notifications capability + APNs setup to receive inbound pushes.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
