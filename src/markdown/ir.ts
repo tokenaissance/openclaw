@@ -773,6 +773,8 @@ function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
     if (
       prev &&
       prev.style === span.style &&
+      // Blockquotes are container blocks. Adjacent blockquote spans should not merge or
+      // consecutive blockquotes can "style bleed" across the paragraph boundary.
       (span.start < prev.end || (span.start === prev.end && span.style !== "blockquote"))
     ) {
       prev.end = Math.max(prev.end, span.end);

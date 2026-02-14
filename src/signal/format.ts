@@ -40,8 +40,8 @@ function normalizeUrlForComparison(url: string): string {
   normalized = normalized.replace(/^https?:\/\//, "");
   // Strip www. prefix
   normalized = normalized.replace(/^www\./, "");
-  // Strip trailing slash
-  normalized = normalized.replace(/\/$/, "");
+  // Strip trailing slashes
+  normalized = normalized.replace(/\/+$/, "");
   return normalized;
 }
 
@@ -324,7 +324,8 @@ function splitSignalFormattedText(
     const brokeOnWhitespace = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
     const nextStart = Math.min(remaining.length, breakIdx + (brokeOnWhitespace ? 1 : 0));
 
-    // Skip leading whitespace in next chunk and update offset to track position
+    // Chunks are sent as separate messages, so we intentionally drop boundary whitespace.
+    // Keep `offset` in sync with the dropped characters so style slicing stays correct.
     remaining = remaining.slice(nextStart).trimStart();
     offset = text.length - remaining.length;
   }
